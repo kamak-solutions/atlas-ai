@@ -2,38 +2,49 @@ import json
 import torch
 from src.tokenizer import CharacterTokenizer
 
-def carregar_e_tokenizar_dados():
-    # 1. Carrega o arquivo JSON
+# Hiperparâmetros da nossa IA
+batch_size = 4  # Quantas sequências processadas em paralelo?
+block_size = 8  # Qual o tamanho do contexto de letras que a IA olha?
+
+def carregar_dados():
     with open("data/dataset_treino.json", "r", encoding="utf-8") as f:
         dados = json.load(f)
     
     texto_bruto = ""
     for item in dados:
         texto_bruto += f" {item['entrada']} {item['saida']}"
-    
-    # 2. Inicializa o Tokenizador
+        
     tokenizer = CharacterTokenizer(texto_bruto)
-    
-    # 3. Transforma TODO o texto de treino em uma lista gigante de IDs
     todos_os_ids = tokenizer.encode(texto_bruto)
+    return torch.tensor(todos_os_ids, dtype=torch.long), tokenizer
+
+# Carrega os tensores globais
+dados_tensor, tokenizer = carregar_dados()
+
+# FUNÇÃO DEV/AI: Gera um lote de dados com Entradas (X) e Alvos (Y)
+def get_batch():
+    # Sorteia índices aleatórios no texto, garantindo que caiba o block_size
+    ix = torch.randint(len(dados_tensor) - block_size, (batch_size,))
     
-    # 4. CONVERSÃO PARA TENSOR DO PYTORCH
-    # Transformamos a lista do Python em um vetor matemático de alta performance (LongTensor)
-    dados_tensor = torch.tensor(todos_os_ids, dtype=torch.long)
+    # Monta as linhas de contexto (X) e os alvos deslocados (Y)
+    x = torch.stack([dados_tensor[i:i+block_size] for i in ix])
+    y = torch.stack([dados_tensor[i+1:i+block_size+1] for i in ix])
+    return x, y
+
+def iniciar_arquitetura():
+    xb, yb = get_batch()
     
-    print("--- Estatísticas dos Tensores (PyTorch) ---")
-    print(f"Formato do Tensor de Dados (Shape): {dados_tensor.shape}")
-    print(f"Tipo do Tensor: {dados_tensor.dtype}")
+    print("--- Dimensões dos Lotes de Treino ---")
+    print(f"Formato do Lote de Entrada (Xb) [Batch, Block]: {xb.shape}")
+    print(f"Formato do Lote de Saída (Yb) [Batch, Block]: {yb.shape}")
     
-    # 5. Criando a lógica de Contexto (X) e Alvo (Y) para a IA aprender
-    # Se a IA ler os primeiros 4 números, ela precisa tentar adivinhar o 5º número.
-    tamanho_bloco = 4 
-    x = dados_tensor[:tamanho_bloco]
-    y = dados_tensor[1:tamanho_bloco+1]
+    print("\n--- Analisando o Lote por Dentro ---")
+    print("Matriz Xb (Números que a IA vê):")
+    print(xb)
     
-    print("\n--- Conceito de Entrada (X) e Saída Esperada (Y) ---")
-    print(f"Se a entrada (X) for: {x.tolist()} -> representação: '{tokenizer.decode(x.tolist())}'")
-    print(f"O alvo (Y) deve ser: {y.tolist()} -> representação: '{tokenizer.decode(y.tolist())}'")
+    print("\nExemplo da primeira linha do lote decodificada:")
+    print(f"Contexto: '{tokenizer.decode(xb[0].tolist())}'")
+    print(f"Alvo Esperado: '{tokenizer.decode(yb[0].tolist())}'")
 
 if __name__ == "__main__":
-    carregar_e_tokenizar_dados()
+    iniciar_arquitetura()
