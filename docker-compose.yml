@@ -1,9 +1,9 @@
-version: '3.8'
-
 services:
-  teste-ambiente:
+  ai-model:
     image: python:3.10-slim
     volumes:
       - .:/app
     working_dir: /app
-    command: python -c "print('Docker e Python estão integrados e funcionando!')"
+    environment:
+      - PYTHONPATH=.
+    command: sh -c "pip install --user pytest && ~/.local/bin/pytest tests/"
