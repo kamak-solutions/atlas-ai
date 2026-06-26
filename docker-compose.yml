@@ -6,4 +6,4 @@ services:
     working_dir: /app
     environment:
       - PYTHONPATH=.
-    command: sh -c "pip install --user pytest && ~/.local/bin/pytest tests/"
+    command: python src/train.py
