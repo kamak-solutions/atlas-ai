@@ -6,4 +6,4 @@ services:
     working_dir: /app
     environment:
       - PYTHONPATH=.
-    command: python src/train.py
+    command: sh -c "pip install -r requirements.txt && python src/train.py"
