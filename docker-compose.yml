@@ -1,5 +1,5 @@
 services:
-  ai-model:
+  ai-train:
     image: python:3.10-slim
     volumes:
       - .:/app
@@ -7,3 +7,15 @@ services:
     environment:
       - PYTHONPATH=.
     command: sh -c "pip install -r requirements.txt && python src/train.py"
+
+  
+  ai-api:
+    image: python:3.10-slim
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    working_dir: /app
+    environment:
+      - PYTHONPATH=.
+    command: sh -c "pip install -r requirements.txt && uvicorn src.api:app --host 0.0.0.0 --port 8000 --reload"
