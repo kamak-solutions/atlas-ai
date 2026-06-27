@@ -45,20 +45,44 @@ def health_check():
 @app.post("/chat")
 def gerar_resposta(request: ChatRequest):
     global modelo, tokenizer
+    
     if not request.prompt.strip():
         raise HTTPException(status_code=400, detail="O prompt não pode estar vazio.")
         
     try:
-        prompt_formatado = f" {request.prompt.strip()} "
+        prompt_original = request.prompt.strip()
+        # Colocamos um espaço para simular o padrão de treino
+        prompt_formatado = f" {prompt_original} "
+        
         contexto_ids = tokenizer.encode(prompt_formatado)
         x = torch.tensor([contexto_ids], dtype=torch.long)
         
-        resposta_ids = modelo.generate(x, max_new_tokens=request.max_tokens)[0].tolist()
-        texto_gerado = tokenizer.decode(resposta_ids)
+        # Deixamos o PyTorch gerar os tokens de forma nativa e otimizada
+        with torch.no_grad(): # Desativa gradientes para economizar MUITA memória
+            resposta_ids = modelo.generate(x, max_new_tokens=request.max_tokens)[0].tolist()
+            
+        texto_gerado = tokenizer.decode(resposta_ids).strip()
         
+        # --- ENGENHARIA DE CORTE CIRÚRGICO ---
+        # 1. Remove o eco da pergunta
+        if texto_gerado.startswith(prompt_original):
+            resposta_limpa = texto_gerado[len(prompt_original):].strip()
+        else:
+            resposta_limpa = texto_gerado
+            
+        # 2. Limpa pontuações grudadas no início
+        if resposta_limpa.startswith(('?', '!', '.', ':', ',', '-')):
+            resposta_limpa = resposta_limpa[1:].strip()
+            
+        # 3. O SEGREDO: Corta na primeira quebra de linha que encontrar!
+        # Se o modelo gerou a resposta e pulou linha para inventar outra coisa, nós ignoramos o resto.
+        if "\n" in resposta_limpa:
+            resposta_limpa = resposta_limpa.split("\n")[0].strip()
+            
         return {
-            "prompt_original": request.prompt,
-            "resposta_completa": texto_gerado.strip()
+            "prompt_original": prompt_original,
+            "resposta_completa": resposta_limpa
         }
     except Exception as e:
+        print(f"[ERRO API]: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

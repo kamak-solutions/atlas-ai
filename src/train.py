@@ -7,10 +7,10 @@ from src.tokenizer import CharacterTokenizer
 # Hiperparâmetros de nível GPT
 batch_size = 32
 block_size = 16
-max_iters = 3000
+max_iters = 1200
 learning_rate = 1e-3
-eval_interval = 500
-eval_iters = 200
+eval_interval = 100
+eval_iters = 50
 n_embd = 64      # Aumentamos os canais internos para suportar as 4 cabeças
 n_head = 4       # 4 cabeças de atenção trabalhando juntas em paralelo!
 
@@ -19,7 +19,7 @@ def carregar_dados():
         dados = json.load(f)
     texto_bruto = ""
     for item in dados:
-        texto_bruto += f" {item['entrada']} {item['saida']}"
+        texto_bruto += f" {item['prompt']} {item['response']}"
     tokenizer = CharacterTokenizer(texto_bruto)
     todos_os_ids = tokenizer.encode(texto_bruto)
     return torch.tensor(todos_os_ids, dtype=torch.long), tokenizer
