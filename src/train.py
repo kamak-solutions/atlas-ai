@@ -182,6 +182,34 @@ def executar_treinamento():
     print(f"Treino Finalizado! Loss Treino Final: {losses['train']:.4f} | Loss Val Final: {losses['val']:.4f}")
     print("-" * 60)
     
+    # --- NOVO: SALVANDO OS PESOS DO MODELO EM DISCO ---
+    print("Salvando o cérebro da IA em 'data/atlas_gpt_pesos.pth'...")
+    torch.save(modelo.state_dict(), "data/atlas_gpt_pesos.pth")
+    print("Modelo salvo com sucesso!")
+    
+    contexto_inicial = torch.zeros((1, 1), dtype=torch.long)
+    print("\n--- Texto Gerado Pelo AtlasGPT Final ---")
+    print(tokenizer.decode(modelo.generate(contexto_inicial, max_new_tokens=150)[0].tolist()))
+    modelo = AtlasGPTModel(vocab_size)
+    optimizer = torch.optim.AdamW(modelo.parameters(), lr=learning_rate)
+    
+    print("Iniciando o Treino do AtlasGPT (Transformer Multi-Head)...")
+    for iteracao in range(max_iters):
+        if iteracao % eval_interval == 0:
+            losses = estimate_loss(modelo)
+            print(f"Passo {iteracao:4d} | Loss Treino: {losses['train']:.4f} | Loss Validação: {losses['val']:.4f}")
+            
+        xb, yb = get_batch('train')
+        logits, loss = modelo(xb, yb)
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+
+    losses = estimate_loss(modelo)
+    print("-" * 60)
+    print(f"Treino Finalizado! Loss Treino Final: {losses['train']:.4f} | Loss Val Final: {losses['val']:.4f}")
+    print("-" * 60)
+    
     contexto_inicial = torch.zeros((1, 1), dtype=torch.long)
     print("\n--- Texto Gerado Pelo AtlasGPT Final ---")
     print(tokenizer.decode(modelo.generate(contexto_inicial, max_new_tokens=150)[0].tolist()))
