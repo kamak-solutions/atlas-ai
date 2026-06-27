@@ -1,0 +1,24 @@
+name: Linter Integrado Atlas-AI
+
+on:
+  push:
+    branches: [ "main", "develop" ]
+  pull_request:
+    branches: [ "main", "develop" ]
+
+jobs:
+  verificar-codigo:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Copiar código do repositório
+      uses: actions/checkout@v4
+
+    - name: Configurar o Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.10"
+
+    - name: Validar Sintaxe do Python (Syntax Check)
+      run: |
+        python -m compileall src/
