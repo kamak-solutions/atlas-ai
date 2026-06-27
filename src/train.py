@@ -4,9 +4,11 @@ import torch.nn as nn
 from torch.nn import functional as F
 from src.tokenizer import CharacterTokenizer
 
-# Hiperparâmetros
-batch_size = 4
-block_size = 8
+# Hiperparâmetros de Treino
+batch_size = 32     # Aumentamos o lote para treinar mais rápido e estável
+block_size = 8      # Contexto de caracteres
+max_iters = 3000    # Quantas vezes a IA vai rodar o loop de estudo
+learning_rate = 1e-2 # Velocidade de ajuste dos pesos (passo do otimizador)
 
 def carregar_dados():
     with open("data/dataset_treino.json", "r", encoding="utf-8") as f:
@@ -27,43 +29,76 @@ def get_batch():
     y = torch.stack([dados_tensor[i+1:i+block_size+1] for i in ix])
     return x, y
 
-# --- ARQUITETURA DA REDE NEURAL ---
 class BigramLanguageModel(nn.Module):
     def __init__(self, vocab_size):
         super().__init__()
-        # Cada token vai indexar diretamente a tabela de probabilidades do próximo token
         self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
 
     def forward(self, idx, targets=None):
-        # idx e targets são matrizes (B, T) de inteiros
-        logits = self.token_embedding_table(idx) # Formato (Batch, Time, Channels) (B, T, C)
+        logits = self.token_embedding_table(idx)
         
         if targets is None:
             loss = None
         else:
-            # O PyTorch espera que a dimensão dos canais (C) seja a segunda para calcular a perda (Loss)
             B, T, C = logits.shape
             logits_remodelados = logits.view(B*T, C)
             targets_remodelados = targets.view(B*T)
-            
-            # Calcula a Cross Entropy Loss (o quanto a IA errou no palpite)
             loss = F.cross_entropy(logits_remodelados, targets_remodelados)
 
         return logits, loss
 
-def iniciar_treino():
-    xb, yb = get_batch()
-    
-    # Inicializa o modelo
+    def generate(self, idx, max_new_tokens):
+        # idx é uma matriz (B, T) de índices no contexto atual
+        for _ in range(max_new_tokens):
+            # Obtém as previsões
+            logits, loss = self(idx)
+            # Foca apenas no último passo temporal (o último caractere gerado)
+            logits = logits[:, -1, :] # vira (B, C)
+            # Aplica softmax para transformar notas em probabilidades reais (0 a 1)
+            probs = F.softmax(logits, dim=-1) # (B, C)
+            # Sorteia o próximo caractere com base na distribuição de probabilidade
+            idx_next = torch.multinomial(probs, num_samples=1) # (B, 1)
+            # Alimenta o novo caractere na sequência em andamento
+            idx = torch.cat((idx, idx_next), dim=1) # (B, T+1)
+        return idx
+
+def executar_treinamento():
     modelo = BigramLanguageModel(vocab_size)
-    logits, loss = modelo(xb, yb)
     
-    print("--- Inicializando os Neurônios do Modelo ---")
-    print(f"Formato dos Logits de saída (B, T, C): {logits.shape}")
-    print(f"Loss inicial (Erro do Modelo): {loss.item():.4f}")
-    print("\nExplicação técnica:")
-    print(f"Como temos {vocab_size} caracteres possíveis, o chute puramente aleatório")
-    print(f"deveria dar um Loss por volta de -ln(1/{vocab_size}) = {torch.log(torch.tensor(vocab_size)).item():.2f}")
+    # Criamos o otimizador AdamW (o motor de ajuste de pesos da IA)
+    optimizer = torch.optim.AdamW(modelo.parameters(), lr=learning_rate)
+    
+    print("--- Texto Gerado ANTES do Treino (Chute Aleatório) ---")
+    contexto_inicial = torch.zeros((1, 1), dtype=torch.long) # Começa com o token 0 (geralmente espaço)
+    print(tokenizer.decode(modelo.generate(contexto_inicial, max_new_tokens=100)[0].tolist()))
+    print("-" * 50)
+
+    print("\nIniciando o loop de treinamento...")
+    for iteracao in range(max_iters):
+        # 1. Pega um lote de treino
+        xb, yb = get_batch()
+        
+        # 2. Roda o modelo e calcula o erro
+        logits, loss = modelo(xb, yb)
+        
+        # 3. Zera os gradientes antigos do passo anterior (padrão do PyTorch)
+        optimizer.zero_grad(set_to_none=True)
+        
+        # 4. Backpropagation: calcula o quanto cada peso contribuiu para o erro
+        loss.backward()
+        
+        # 5. Atualiza os pesos na tabela
+        optimizer.step()
+        
+        # Imprime o progresso a cada 500 passos
+        if iteracao % 500 == 0:
+            print(f"Passo {iteracao:4d} | Loss (Erro): {loss.item():.4f}")
+
+    print("-" * 50)
+    print(f"Treino Finalizado! Erro Final: {loss.item():.4f}")
+    
+    print("\n--- Texto Gerado DEPOIS do Treino (IA Aprendendo) ---")
+    print(tokenizer.decode(modelo.generate(contexto_inicial, max_new_tokens=100)[0].tolist()))
 
 if __name__ == "__main__":
-    iniciar_treino()
+    executar_treinamento()
