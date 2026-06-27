@@ -4,14 +4,15 @@ import torch.nn as nn
 from torch.nn import functional as F
 from src.tokenizer import CharacterTokenizer
 
-# Hiperparâmetros ajustados para o Mini-GPT
+# Hiperparâmetros de nível GPT
 batch_size = 32
-block_size = 16  # Aumentamos o contexto de 8 para 16 caracteres!
+block_size = 16
 max_iters = 3000
-learning_rate = 1e-3 # Reduzimos o learning rate para estabilizar a atenção
+learning_rate = 1e-3
 eval_interval = 500
 eval_iters = 200
-n_embd = 32      # Dimensão das características internas (Embedding de tamanho 32)
+n_embd = 64      # Aumentamos os canais internos para suportar as 4 cabeças
+n_head = 4       # 4 cabeças de atenção trabalhando juntas em paralelo!
 
 def carregar_dados():
     with open("data/dataset_treino.json", "r", encoding="utf-8") as f:
@@ -51,59 +52,94 @@ def estimate_loss(modelo):
     modelo.train()
     return out
 
-# --- MECANISMO DE ATENÇÃO (SELF-ATTENTION HEAD) ---
+# --- 1. UMA CABEÇA DE ATENÇÃO ---
 class Head(nn.Module):
-    """ Uma cabeça de auto-atenção (Self-Attention Head) """
     def __init__(self, head_size):
         super().__init__()
         self.key = nn.Linear(n_embd, head_size, bias=False)
         self.query = nn.Linear(n_embd, head_size, bias=False)
         self.value = nn.Linear(n_embd, head_size, bias=False)
-        # Cria uma máscara triangular para garantir que o modelo não espie o futuro
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
 
     def forward(self, x):
         B, T, C = x.shape
-        k = self.key(x)   # (B, T, head_size)
-        q = self.query(x) # (B, T, head_size)
-        
-        # Calcula as notas de afinidade (pesos de atenção)
-        wei = q @ k.transpose(-2, -1) * C**-0.5 # (B, T, head_size) @ (B, head_size, T) -> (B, T, T)
-        # Aplica a máscara: impede que o caractere atual olhe para as letras da frente
+        k = self.key(x)   
+        q = self.query(x) 
+        wei = q @ k.transpose(-2, -1) * C**-0.5
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float('-inf'))
-        wei = F.softmax(wei, dim=-1) # (B, T, T)
-        
-        # Executa a agregação ponderada dos valores
-        v = self.value(x) # (B, T, head_size)
-        out = wei @ v # (B, T, T) @ (B, T, head_size) -> (B, T, head_size)
+        wei = F.softmax(wei, dim=-1)
+        v = self.value(x)
+        out = wei @ v
         return out
 
-# --- MODELO GPT EVOLUÍDO ---
-class MiniGPTLanguageModel(nn.Module):
+# --- 2. MULTI-HEAD ATTENTION (VÁRIAS CABEÇAS EM PARALELO) ---
+class MultiHeadAttention(nn.Module):
+    def __init__(self, num_heads, head_size):
+        super().__init__()
+        # Criamos uma lista de cabeças usando ModuleList do PyTorch
+        self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)])
+        # Projeção linear para unificar a saída das cabeças
+        self.proj = nn.Linear(n_embd, n_embd)
+
+    def forward(self, x):
+        # Roda cada cabeça de atenção individualmente e concatena as saídas nos canais (C)
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.proj(out)
+        return out
+
+# --- 3. FEED-FORWARD NETWORK (A CAMADA DE PENSAMENTO) ---
+class FeedFoward(nn.Module):
+    def __init__(self, n_embd):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd), # Projeção de volta
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+# --- 4. O BLOCO TRANSFORMER COMPLETO ---
+class Block(nn.Module):
+    def __init__(self, n_embd, n_head):
+        super().__init__()
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(n_head, head_size)
+        self.ffwd = FeedFoward(n_embd)
+        self.ln1 = nn.LayerNorm(n_embd)
+        self.ln2 = nn.LayerNorm(n_embd)
+
+    def forward(self, x):
+        # Conexões residuais somando o X original ao resultado normalizado (LayerNorm)
+        x = x + self.sa(self.ln1(x))
+        x = x + self.ffwd(self.ln2(x))
+        return x
+
+# --- ARQUITETURA FINAL DO NOSSO DECODER TRANSFORMER ---
+class AtlasGPTModel(nn.Module):
     def __init__(self, vocab_size):
         super().__init__()
-        # Agora o token passa por um Embedding de características (n_embd)
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
-        # O modelo também aprende a posição de onde a letra está na frase!
         self.position_embedding_table = nn.Embedding(block_size, n_embd)
-        # Adicionamos a nossa cabeça de atenção à rede
-        self.sa_head = Head(n_embd)
-        # Camada linear final para converter os embeddings de volta em notas para o vocabulário
+        
+        # O nosso cérebro agora possui um bloco completo do Transformer!
+        self.transformer_block = Block(n_embd, n_head=n_head)
+        
+        self.ln_f = nn.LayerNorm(n_embd) # Camada de normalização final
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
 
-        # Busca os embeddings de conteúdo e de posição espacial
-        tok_emb = self.token_embedding_table(idx) # (B, T, n_embd)
-        pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device)) # (T, n_embd)
-        x = tok_emb + pos_emb # (B, T, n_embd)
+        tok_emb = self.token_embedding_table(idx) 
+        pos_emb = self.position_embedding_table(torch.arange(T, device=idx.device)) 
+        x = tok_emb + pos_emb 
         
-        # Passa pelo mecanismo de Auto-Atenção
-        x = self.sa_head(x) # (B, T, n_embd)
-        
-        # Projeta os resultados para o tamanho do vocabulário
-        logits = self.lm_head(x) # (B, T, vocab_size)
+        # Passa pelo bloco Transformer completo (Atenção + Neurônios)
+        x = self.transformer_block(x) 
+        x = self.ln_f(x)
+        logits = self.lm_head(x) 
         
         if targets is None:
             loss = None
@@ -117,7 +153,6 @@ class MiniGPTLanguageModel(nn.Module):
 
     def generate(self, idx, max_new_tokens):
         for _ in range(max_new_tokens):
-            # Como aumentamos o contexto, precisamos cortar o idx para caber no block_size máximo
             idx_cond = idx[:, -block_size:]
             logits, loss = self(idx_cond)
             logits = logits[:, -1, :]
@@ -127,10 +162,10 @@ class MiniGPTLanguageModel(nn.Module):
         return idx
 
 def executar_treinamento():
-    modelo = MiniGPTLanguageModel(vocab_size)
+    modelo = AtlasGPTModel(vocab_size)
     optimizer = torch.optim.AdamW(modelo.parameters(), lr=learning_rate)
     
-    print("Iniciando o Treino do Mini-GPT com Self-Attention...")
+    print("Iniciando o Treino do AtlasGPT (Transformer Multi-Head)...")
     for iteracao in range(max_iters):
         if iteracao % eval_interval == 0:
             losses = estimate_loss(modelo)
@@ -148,7 +183,7 @@ def executar_treinamento():
     print("-" * 60)
     
     contexto_inicial = torch.zeros((1, 1), dtype=torch.long)
-    print("\n--- Texto Gerado Pela Nova Arquitetura GPT ---")
+    print("\n--- Texto Gerado Pelo AtlasGPT Final ---")
     print(tokenizer.decode(modelo.generate(contexto_inicial, max_new_tokens=150)[0].tolist()))
 
 if __name__ == "__main__":
